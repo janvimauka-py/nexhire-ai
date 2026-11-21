@@ -413,6 +413,8 @@ export default function InterviewRoomPage() {
   const [permissionsGranted, setPermissionsGranted] = useState(false)
   const [testingMic, setTestingMic] = useState(false)
   const [micLevel, setMicLevel] = useState(0)
+  const [hasVideoStream, setHasVideoStream] = useState(false)
+  const [cameraError, setCameraError] = useState<string | null>(null)
 
   // Layout mode: 'split' (both large side by side) | 'interviewer' | 'candidate'
   const [layoutMode, setLayoutMode] = useState<'split' | 'interviewer' | 'candidate'>('split')
@@ -528,46 +530,108 @@ export default function InterviewRoomPage() {
     }
   }, [permissionsGranted, paused, micOn, interviewTurn])
 
-  // Callback ref to guarantee stream is always attached to the DOM element
+  // Callback ref to guarantee stream is always attached to the DOM element with explicit muted/playsinline
   const setCandidateVideoRef = (el: HTMLVideoElement | null) => {
     videoRef.current = el
-    if (el && streamRef.current) {
-      el.srcObject = streamRef.current
-      el.play().catch(e => console.warn('Video auto-play handled:', e))
+    if (el) {
+      el.muted = true
+      el.defaultMuted = true
+      el.playsInline = true
+      el.setAttribute('playsinline', 'true')
+      el.setAttribute('muted', 'true')
+      el.setAttribute('autoplay', 'true')
+      if (streamRef.current) {
+        if (el.srcObject !== streamRef.current) {
+          el.srcObject = streamRef.current
+        }
+        el.play().then(() => setHasVideoStream(true)).catch(e => console.warn('Video auto-play handled:', e))
+      }
     }
   }
 
   async function initCameraAndMic() {
+    setCameraError(null)
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: 1280, height: 720, facingMode: 'user' },
-        audio: true
-      })
+      let stream: MediaStream
+      try {
+        // Multi-tier constraints: ideal resolution prevents OverconstrainedError
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            width: { ideal: 1280, max: 1920 },
+            height: { ideal: 720, max: 1080 },
+            facingMode: 'user'
+          },
+          audio: true
+        })
+      } catch (err1) {
+        console.warn('Ideal 720p constraints failed, falling back to facingMode:', err1)
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: 'user' },
+            audio: true
+          })
+        } catch (err2) {
+          console.warn('FacingMode failed, falling back to basic video+audio:', err2)
+          try {
+            stream = await navigator.mediaDevices.getUserMedia({
+              video: true,
+              audio: true
+            })
+          } catch (err3) {
+            console.warn('Audio+video failed, requesting video only:', err3)
+            stream = await navigator.mediaDevices.getUserMedia({ video: true })
+          }
+        }
+      }
+
       streamRef.current = stream
+      setHasVideoStream(true)
 
       if (videoRef.current) {
+        videoRef.current.muted = true
+        videoRef.current.defaultMuted = true
+        videoRef.current.playsInline = true
+        videoRef.current.setAttribute('playsinline', 'true')
+        videoRef.current.setAttribute('muted', 'true')
         videoRef.current.srcObject = stream
-        videoRef.current.play().catch(e => console.warn('Video play:', e))
+        videoRef.current.play().then(() => setHasVideoStream(true)).catch(e => console.warn('Video play:', e))
       }
 
-      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)()
-      const analyser = audioCtx.createAnalyser()
-      const source = audioCtx.createMediaStreamSource(stream)
-      source.connect(analyser)
-      analyser.fftSize = 64
+      // Safe AudioContext setup that handles Autoplay suspension gracefully
+      try {
+        const AudioCtxClass = window.AudioContext || (window as any).webkitAudioContext
+        if (AudioCtxClass && stream.getAudioTracks().length > 0) {
+          const audioCtx = new AudioCtxClass()
+          if (audioCtx.state === 'suspended') {
+            const resumeAudio = () => {
+              audioCtx.resume()
+              window.removeEventListener('click', resumeAudio)
+            }
+            window.addEventListener('click', resumeAudio, { once: true })
+          }
+          const analyser = audioCtx.createAnalyser()
+          const source = audioCtx.createMediaStreamSource(stream)
+          source.connect(analyser)
+          analyser.fftSize = 64
 
-      const dataArray = new Uint8Array(analyser.frequencyBinCount)
-      const checkAudio = () => {
-        if (!testingMic) return
-        analyser.getByteFrequencyData(dataArray)
-        const avg = dataArray.reduce((p, c) => p + c, 0) / dataArray.length
-        setMicLevel(Math.min(100, Math.round((avg / 128) * 100)))
-        requestAnimationFrame(checkAudio)
+          const dataArray = new Uint8Array(analyser.frequencyBinCount)
+          const checkAudio = () => {
+            if (!testingMic) return
+            analyser.getByteFrequencyData(dataArray)
+            const avg = dataArray.reduce((p, c) => p + c, 0) / dataArray.length
+            setMicLevel(Math.min(100, Math.round((avg / 128) * 100)))
+            requestAnimationFrame(checkAudio)
+          }
+          setTestingMic(true)
+          requestAnimationFrame(checkAudio)
+        }
+      } catch (audioErr) {
+        console.warn('AudioContext init note:', audioErr)
       }
-      setTestingMic(true)
-      requestAnimationFrame(checkAudio)
-    } catch {
-      toast.error('Camera or microphone permission required. Please allow access.')
+    } catch (err: any) {
+      console.error('Camera init error:', err)
+      setCameraError(err?.message || 'Camera access denied or unavailable')
+      toast.error('Camera access needed. Please grant permissions in your browser URL bar.')
     }
   }
 
@@ -863,6 +927,16 @@ export default function InterviewRoomPage() {
   function handleEnterRoom() {
     setPermissionsGranted(true)
     startVisionPostureAnalysis()
+
+    if (videoRef.current && streamRef.current) {
+      videoRef.current.muted = true
+      videoRef.current.defaultMuted = true
+      videoRef.current.playsInline = true
+      videoRef.current.setAttribute('playsinline', 'true')
+      videoRef.current.setAttribute('muted', 'true')
+      videoRef.current.srcObject = streamRef.current
+      videoRef.current.play().then(() => setHasVideoStream(true)).catch(e => console.warn(e))
+    }
 
     const firstQuestion = stages[0].question(candidateName)
     setMessages([{ role: 'interviewer', content: firstQuestion, timestamp: new Date() }])
@@ -1306,13 +1380,35 @@ RETURN STRICT JSON ONLY:
               layoutMode === 'interviewer' ? 'hidden' : 'flex-1'
             }`}>
               {camOn ? (
-                <video
-                  ref={setCandidateVideoRef}
-                  autoPlay
-                  muted
-                  playsInline
-                  className="w-full h-full object-cover transform -scale-x-100"
-                />
+                <>
+                  <video
+                    ref={setCandidateVideoRef}
+                    autoPlay
+                    muted
+                    playsInline
+                    className="w-full h-full object-cover transform -scale-x-100"
+                  />
+                  {!hasVideoStream && (
+                    <div className="absolute inset-0 bg-black/85 flex flex-col items-center justify-center p-6 text-center space-y-3 z-30">
+                      <div className="w-14 h-14 rounded-2xl bg-amber-500/20 border border-amber-500/30 flex items-center justify-center text-amber-400">
+                        <VideoOff className="w-7 h-7" />
+                      </div>
+                      <div>
+                        <h4 className="text-white font-bold text-sm">Allow Camera Permission</h4>
+                        <p className="text-xs text-gray-400 mt-1 max-w-xs">
+                          {cameraError || 'Browser requires camera permission to display your video in this interview.'}
+                        </p>
+                      </div>
+                      <button
+                        onClick={initCameraAndMic}
+                        className="btn-primary text-xs px-4 py-2 flex items-center gap-1.5 shadow-lg"
+                      >
+                        <Video className="w-3.5 h-3.5" />
+                        <span>Allow / Start Webcam</span>
+                      </button>
+                    </div>
+                  )}
+                </>
               ) : (
                 <div className="flex flex-col items-center justify-center p-6 text-center space-y-3">
                   <div className="w-24 h-24 rounded-full bg-white/10 border border-white/20 flex items-center justify-center text-white text-3xl font-bold">
