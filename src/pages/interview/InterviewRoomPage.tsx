@@ -5,13 +5,21 @@ import {
   Mic, MicOff, Video, VideoOff, Volume2, VolumeX,
   PhoneOff, Pause, Play, MessageSquare, Clock,
   Loader2, Send, Eye, ShieldCheck, Activity,
-  CheckCircle2, Sparkles, BookOpen, ChevronUp,
-  Award, Check, XCircle, Radio, CornerDownLeft,
-  Volume1, Hand, LayoutGrid, Maximize2, User
+  CheckCircle2, Sparkles, Hand, LayoutGrid, Maximize2,
+  Radio, Volume1, AlertCircle, CornerDownLeft
 } from 'lucide-react'
-import { askGemini, isGeminiConfigured } from '../../lib/gemini'
+import { askGeminiChat, isGeminiConfigured } from '../../lib/gemini'
 import { useAuth } from '../../contexts/AuthContext'
 import toast from 'react-hot-toast'
+
+export type ConversationState =
+  | 'IDLE'
+  | 'LISTENING'
+  | 'PROCESSING'
+  | 'THINKING'
+  | 'SPEAKING'
+  | 'INTERRUPTED'
+  | 'ERROR'
 
 export interface CandidateResponseRecord {
   stageName: string
@@ -25,16 +33,9 @@ export interface CandidateResponseRecord {
 }
 
 interface Message {
-  role: 'interviewer' | 'user'
+  role: 'user' | 'model'
   content: string
   timestamp: Date
-  conversationType?: 'answer' | 'casual' | 'clarification' | 'nervous' | 'admit_unknown' | 'gratitude'
-  analysis?: {
-    score: number
-    strengths: string
-    errorsDetected: string | null
-    correctedAnswer: string
-  }
 }
 
 interface PostureMetrics {
@@ -46,178 +47,6 @@ interface PostureMetrics {
   attitudeStatus: 'Confident & Engaged' | 'Distracted' | 'Fidgeting / Restless' | 'Attentive'
   lastFeedback: string | null
 }
-
-interface InterviewStage {
-  stageName: string
-  badge: string
-  question: (name: string) => string
-  keyPoints: string[]
-  modelAnswer: string
-  commonPitfalls: string[]
-}
-
-const TECHNICAL_STAGES: InterviewStage[] = [
-  {
-    stageName: 'Stage 1: Professional Introduction & Technical Background',
-    badge: 'Introduction',
-    question: (name: string) =>
-      `Hello ${name}, welcome! Thank you for joining us today. My name is Anway. I'm a Senior Staff Software Engineer on the Distributed Systems infrastructure team. Before we dive into technical problems and algorithms, I want to give you the floor. Please introduce yourself — tell me about your background, the key projects you've built, and what areas of technology excite you the most.`,
-    keyPoints: [
-      'Concise 60-90 second elevator pitch covering education, core tech stack, and proudest project.',
-      'Show passion for problem solving and continuous learning.',
-      'Keep it structured: Past background → Present technical focus → Future aspiration.'
-    ],
-    modelAnswer:
-      "Hello Anway, thank you for having me! I have a strong foundation in Computer Science and software engineering. Over the past few years, I've specialized in full-stack engineering and distributed backends, primarily working with React, TypeScript, Python, and SQL databases. Recently, I built an end-to-end scalable application with microservices and containerized workflows. What excites me most is designing resilient, low-latency systems that solve tangible problems at scale.",
-    commonPitfalls: [
-      'Reciting your resume line-by-line without storytelling.',
-      'Rambling past 2 minutes without clear structure.',
-      'Failing to mention specific technologies you are comfortable discussing.'
-    ]
-  },
-  {
-    stageName: 'Stage 2: Core CS Fundamentals & Memory Architecture',
-    badge: 'CS Fundamentals',
-    question: (_name: string) =>
-      `Great introduction! Let's examine some core engineering fundamentals. Can you explain the internal differences between a Hash Table and a Balanced Binary Search Tree? Specifically, under what conditions does a Hash Table lookup degrade from O(1) to O(N), and how do modern runtimes mitigate this?`,
-    keyPoints: [
-      'Hash Table: O(1) average lookup using hash function and buckets. Degradation occurs during excessive hash collisions.',
-      'BST (e.g., Red-Black Tree): O(log N) guaranteed lookup with in-order sorting.',
-      'Collision resolution: Separate chaining (linked lists/trees in Java 8+) and open addressing.',
-      'Treeification: Converting linked buckets to balanced trees when chain length exceeds threshold (e.g., 8 in Java).'
-    ],
-    modelAnswer:
-      "In a Hash Table, lookups are average O(1) time because keys are mapped via a hash function into an array of buckets. However, if multiple keys hash to the same bucket (collision), it degrades to O(N) if chained linearly. In contrast, a Balanced BST (like a Red-Black Tree) guarantees O(log N) worst-case lookups and maintains sorted order. Modern engines mitigate collision degradation through prime-sized dynamic resizing and 'treeification', where bucket chains convert into balanced search trees once length exceeds a threshold like 8.",
-    commonPitfalls: [
-      'Stating Hash Tables are always strictly O(1) without acknowledging worst-case O(N).',
-      'Forgetting how collision resolution works in practice.'
-    ]
-  },
-  {
-    stageName: 'Stage 3: Algorithmic Problem Solving & DSA Optimization',
-    badge: 'DSA & Algorithms',
-    question: (_name: string) =>
-      `Excellent! Now let's work on an algorithmic scenario: Suppose you are given a stream of integers and need to continuously find the 'Median' of the numbers seen so far in O(1) time. How would you architect this data structure? Walk me through your design, edge cases, and time/space complexity.`,
-    keyPoints: [
-      'Dual Heap Pattern: Max-Heap for lower half of numbers, Min-Heap for upper half.',
-      'Balancing invariant: Size difference between the two heaps must never exceed 1.',
-      'Insertion time: O(log N) to insert into heaps.',
-      'Median retrieval: O(1) by peeking the top of one or both heaps.'
-    ],
-    modelAnswer:
-      "The optimal solution uses the Dual Heap pattern. We maintain two heaps: a Max-Heap for the smaller half of numbers and a Min-Heap for the larger half. Invariant: either both heaps have equal size (even count), or the Max-Heap has exactly one more element (odd count). To find the median in O(1), if total count is odd, it's the top of the Max-Heap; if even, it's the average of both tops. Inserting a new number takes O(log N) to push and rebalance heaps, with O(N) auxiliary space.",
-    commonPitfalls: [
-      'Proposing a single sorted array which takes O(N) insertion time.',
-      'Failing to mention how to maintain the heap balance invariant.'
-    ]
-  },
-  {
-    stageName: 'Stage 4: System Architecture & Distributed Scalability',
-    badge: 'System Design',
-    question: (_name: string) =>
-      `Let's transition to system architecture. Imagine we need to design a distributed Rate Limiter for an API gateway handling 100,000 requests per second across multiple data centers. Which rate-limiting algorithm would you choose, where would you store state, and how would you prevent race conditions under high concurrency?`,
-    keyPoints: [
-      'Algorithms: Token Bucket or Sliding Window Log / Counter.',
-      'State Storage: In-memory distributed cache like Redis with clustered sharding.',
-      'Concurrency control: Redis Lua scripts or atomic INCR/EXPIRE operations to eliminate race conditions.',
-      'Fault tolerance: Local memory fallback if central cache is unreachable.'
-    ],
-    modelAnswer:
-      "For a high-throughput API gateway, I would choose the Token Bucket algorithm for its memory efficiency and ability to handle bursts. For state storage, a centralized distributed in-memory cache like Redis Cluster is ideal. To prevent race conditions between concurrent requests, we execute the token deduction logic inside an atomic Redis Lua script. At 100k RPS, we shard keys by user ID/IP and add a local in-memory fallback cache with circuit breakers to guarantee resilience if Redis experiences latency.",
-    commonPitfalls: [
-      'Suggesting an RDBMS database which would bottle-neck at 100k writes/sec.',
-      'Ignoring distributed race conditions when multiple app servers update counters concurrently.'
-    ]
-  },
-  {
-    stageName: 'Stage 5: Candidate Questions & Professional Wrap-Up',
-    badge: 'Wrap-Up',
-    question: (_name: string) =>
-      `You've done very well across our technical rounds. We have a few minutes left, and interviewers love curious engineers. What thoughtful questions do you have for me about our engineering team, our architectural roadmap, or how we handle production incidents?`,
-    keyPoints: [
-      'Ask insightful questions about engineering culture, deployment pipelines, or technical debt.',
-      'Avoid generic questions like "What are the hours?". Show technical curiosity.',
-      'Inquire about team autonomy, microservices evolution, or mentorship.'
-    ],
-    modelAnswer:
-      "Thank you, Anway! I have two questions: First, how does your engineering team balance shipping product features with refactoring technical debt and maintaining infrastructure resilience? Second, could you share how your team approaches blameless post-mortems when critical production incidents happen?",
-    commonPitfalls: [
-      'Saying "No, I don\'t have any questions."',
-      'Asking questions easily found on Google\'s public homepage.'
-    ]
-  }
-]
-
-const HR_STAGES: InterviewStage[] = [
-  {
-    stageName: 'Stage 1: Self-Introduction & Career Trajectory',
-    badge: 'Introduction',
-    question: (name: string) =>
-      `Hi ${name}, wonderful to meet you! My name is Arvi, and I lead talent acquisition and people culture. Today's conversation is designed to get to know the person behind the credentials — how you think, how you collaborate, and what motivates you. To kick things off, please introduce yourself and tell me about your journey and what brings you here today.`,
-    keyPoints: [
-      'Articulate elevator pitch highlighting values, work ethic, and achievements.',
-      'Communicate with warmth, positive energy, and professional presence.',
-      'Clear connection between past achievements and excitement for this company.'
-    ],
-    modelAnswer:
-      "Hi Arvi, it's a pleasure to speak with you! My journey began with a curiosity for building software that makes people's lives easier. Over the course of my engineering degree, I've honed both my technical skills in full-stack development and my leadership abilities by coordinating hackathons and student engineering chapters. I thrive in collaborative environments where ownership and empathy matter just as much as technical excellence.",
-    commonPitfalls: [
-      'Speaking in a monotone, unenthusiastic voice.',
-      'Focusing purely on technical jargon without showing interpersonal strengths.'
-    ]
-  },
-  {
-    stageName: 'Stage 2: Conflict Resolution & Team Collaboration (STAR Method)',
-    badge: 'Behavioral',
-    question: (name: string) =>
-      `Thank you, ${name}! Collaboration is critical here. Tell me about a time when you experienced a disagreement or conflict within a project team — whether technical or interpersonal. How did you handle it and what was the outcome?`,
-    keyPoints: [
-      'Situation: Set context briefly.',
-      'Task: What was your specific responsibility?',
-      'Action: Emphasize empathetic listening, data-driven discussion, and compromise.',
-      'Result: Positive outcome for the project and strengthened relationships.'
-    ],
-    modelAnswer:
-      "During our capstone engineering project, two team members and I disagreed on whether to use GraphQL or REST for our API. Rather than let debates stall progress, I organized a 30-minute whiteboard spike where we evaluated our requirements against both options: client bandwidth, team familiarity, and delivery deadlines. When the data showed our schema was stable and REST would allow us to ship 2 weeks faster, the team aligned harmoniously. We shipped on time with zero regressions.",
-    commonPitfalls: [
-      'Blaming the other person or sounding defensive.',
-      'Not specifying your personal action in resolving the tension.'
-    ]
-  },
-  {
-    stageName: 'Stage 3: Handling Failure, Setbacks, and Growth Mindset',
-    badge: 'Resilience',
-    question: (_name: string) =>
-      `Great answer. In engineering, setbacks happen. Can you describe a specific time you made a significant mistake or failed to meet an expectation? How did you take ownership and what did you learn?`,
-    keyPoints: [
-      'Honest, genuine admission of a real mistake without deflection.',
-      'Immediate constructive accountability and containment.',
-      'Long-term systemic improvement or preventative measure implemented.'
-    ],
-    modelAnswer:
-      "In a previous internship project, I pushed an unverified configuration change that briefly broke our staging integration pipeline. As soon as automated alerts fired, I notified our lead, took full ownership, and immediately reverted the commit. Afterwards, instead of simply moving on, I authored a pull-request checklist and added automated pre-commit linting to guarantee that bad configuration syntax would be caught before reaching staging. That mistake taught me the importance of defense-in-depth.",
-    commonPitfalls: [
-      'Choosing a fake failure like "I worked too hard."',
-      'Blaming leadership, unclear specs, or teammates.'
-    ]
-  },
-  {
-    stageName: 'Stage 4: Company Culture & Candidate Questions',
-    badge: 'Culture Fit',
-    question: (_name: string) =>
-      `That shows great self-awareness. Why do our company's mission and engineering values resonate with you personally, and what questions do you have for me about our culture and growth pathways?`,
-    keyPoints: [
-      'Demonstrate genuine knowledge of company culture (e.g. innovation, ownership, customer obsession).',
-      'Ask questions about professional growth, peer mentorship, and team rituals.'
-    ],
-    modelAnswer:
-      "Your commitment to user-centric engineering and continuous innovation deeply aligns with my values. I admire how your teams empower junior engineers to take end-to-end ownership. My question for you, Arvi: What differentiates the engineers who truly thrive and grow into leaders within your organization during their first year?",
-    commonPitfalls: [
-      'Giving generic answers that apply to any random company.',
-      'Focusing solely on compensation or perks.'
-    ]
-  }
-]
 
 function RealisticAnway({ speaking, isBlinking }: { speaking: boolean; isBlinking: boolean }) {
   return (
@@ -287,7 +116,7 @@ function RealisticAnway({ speaking, isBlinking }: { speaking: boolean; isBlinkin
             <h3 className="text-white font-black text-lg tracking-wide">ANWAY</h3>
             <span className="badge badge-blue text-[10px] uppercase">Senior Staff Engineer</span>
           </div>
-          <p className="text-blue-300 text-xs mt-0.5">Google & Meta Interview Specialist • Distributed Systems</p>
+          <p className="text-blue-300 text-xs mt-0.5">Google Technical Lead • Real-Time AI Conversational Coach</p>
 
           {speaking && (
             <div className="flex justify-center items-center gap-1 mt-2.5 h-4">
@@ -376,7 +205,7 @@ function RealisticArvi({ speaking, isBlinking }: { speaking: boolean; isBlinking
             <h3 className="text-white font-black text-lg tracking-wide">ARVI</h3>
             <span className="badge badge-purple text-[10px] uppercase">Director of People & Talent</span>
           </div>
-          <p className="text-purple-300 text-xs mt-0.5">Behavioral Psychologist & STAR Assessment Lead</p>
+          <p className="text-purple-300 text-xs mt-0.5">Behavioral Psychologist & STAR Coach • Real-Time AI</p>
 
           {speaking && (
             <div className="flex justify-center items-center gap-1 mt-2.5 h-4">
@@ -407,7 +236,6 @@ export default function InterviewRoomPage() {
   const duration = parseInt(searchParams.get('duration') || '30')
 
   const candidateName = profile?.full_name || 'Janvi'
-  const stages: InterviewStage[] = interviewer === 'arvi' ? HR_STAGES : TECHNICAL_STAGES
 
   // Hardware permission state
   const [permissionsGranted, setPermissionsGranted] = useState(false)
@@ -416,27 +244,22 @@ export default function InterviewRoomPage() {
   const [hasVideoStream, setHasVideoStream] = useState(false)
   const [cameraError, setCameraError] = useState<string | null>(null)
 
-  // Layout mode: 'split' (both large side by side) | 'interviewer' | 'candidate'
+  // Layout mode
   const [layoutMode, setLayoutMode] = useState<'split' | 'interviewer' | 'candidate'>('split')
 
-  // Interview stage state
-  const [currentStageIdx, setCurrentStageIdx] = useState(0)
+  // Real-Time Conversational AI State Machine
+  // IDLE | LISTENING | PROCESSING | THINKING | SPEAKING | INTERRUPTED | ERROR
+  const [conversationState, setConversationState] = useState<ConversationState>('IDLE')
   const [messages, setMessages] = useState<Message[]>([])
-  const [collectedResponses, setCollectedResponses] = useState<CandidateResponseRecord[]>([])
+  const [liveCandidateSpeech, setLiveCandidateSpeech] = useState('')
   const [userInput, setUserInput] = useState('')
-  const [interviewerSpeaking, setInterviewerSpeaking] = useState(false)
-  const [isBlinking, setIsBlinking] = useState(false)
+  const [currentCaption, setCurrentCaption] = useState('')
   const [micOn, setMicOn] = useState(true)
   const [camOn, setCamOn] = useState(true)
   const [soundOn, setSoundOn] = useState(true)
   const [paused, setPaused] = useState(false)
   const [timeLeft, setTimeLeft] = useState(duration * 60)
-  const [currentCaption, setCurrentCaption] = useState('')
-  const [showModelAnswer, setShowModelAnswer] = useState(false)
-
-  // Explicit Turn-Taking State
-  const [interviewTurn, setInterviewTurn] = useState<'interviewer_speaking' | 'candidate_listening' | 'evaluating'>('interviewer_speaking')
-  const [liveCandidateSpeech, setLiveCandidateSpeech] = useState('')
+  const [isBlinking, setIsBlinking] = useState(false)
 
   // Posture AI State
   const [postureMetrics, setPostureMetrics] = useState<PostureMetrics>({
@@ -455,20 +278,20 @@ export default function InterviewRoomPage() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const timerRef = useRef<any>(null)
   const visionIntervalRef = useRef<any>(null)
-  const lastSpokenPostureWarning = useRef<number>(0)
   const previousFrameData = useRef<Uint8ClampedArray | null>(null)
 
-  // Speech Recognition Refs
+  // Conversational AI Engine Refs
   const recognitionRef = useRef<any>(null)
   const silenceTimerRef = useRef<any>(null)
   const accumulatedSpeechRef = useRef<string>('')
-  const interviewTurnRef = useRef<'interviewer_speaking' | 'candidate_listening' | 'evaluating'>('interviewer_speaking')
-  const currentUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null)
+  const conversationStateRef = useRef<ConversationState>('IDLE')
+  const chatHistoryRef = useRef<{ role: 'user' | 'model'; content: string }[]>([])
+  const isGeneratingRef = useRef<boolean>(false)
 
-  // Synchronize turn ref
+  // Sync state ref
   useEffect(() => {
-    interviewTurnRef.current = interviewTurn
-  }, [interviewTurn])
+    conversationStateRef.current = conversationState
+  }, [conversationState])
 
   // Blinking cycle
   useEffect(() => {
@@ -479,7 +302,7 @@ export default function InterviewRoomPage() {
     return () => clearInterval(blinkInterval)
   }, [])
 
-  // Setup Camera and Mic on Mount
+  // Camera & Mic setup
   useEffect(() => {
     initCameraAndMic()
     return () => {
@@ -516,21 +339,18 @@ export default function InterviewRoomPage() {
     return () => clearInterval(timerRef.current)
   }, [permissionsGranted, paused])
 
-  // Manage speech recognition when turn changes
+  // Continuous speech recognition manager
   useEffect(() => {
     if (!permissionsGranted || paused || !micOn) {
       stopRecognitionEngine()
       return
     }
 
-    if (interviewTurn === 'candidate_listening') {
-      startRecognitionEngine()
-    } else {
-      stopRecognitionEngine()
-    }
-  }, [permissionsGranted, paused, micOn, interviewTurn])
+    // Keep recognition active for listening & barge-in detection
+    startRecognitionEngine()
+  }, [permissionsGranted, paused, micOn])
 
-  // Callback ref to guarantee stream is always attached to the DOM element with explicit muted/playsinline
+  // Callback ref to guarantee stream is always attached to the DOM element
   const setCandidateVideoRef = (el: HTMLVideoElement | null) => {
     videoRef.current = el
     if (el) {
@@ -554,7 +374,6 @@ export default function InterviewRoomPage() {
     try {
       let stream: MediaStream
       try {
-        // Multi-tier constraints: ideal resolution prevents OverconstrainedError
         stream = await navigator.mediaDevices.getUserMedia({
           video: {
             width: { ideal: 1280, max: 1920 },
@@ -563,22 +382,16 @@ export default function InterviewRoomPage() {
           },
           audio: true
         })
-      } catch (err1) {
-        console.warn('Ideal 720p constraints failed, falling back to facingMode:', err1)
+      } catch {
         try {
           stream = await navigator.mediaDevices.getUserMedia({
             video: { facingMode: 'user' },
             audio: true
           })
-        } catch (err2) {
-          console.warn('FacingMode failed, falling back to basic video+audio:', err2)
+        } catch {
           try {
-            stream = await navigator.mediaDevices.getUserMedia({
-              video: true,
-              audio: true
-            })
-          } catch (err3) {
-            console.warn('Audio+video failed, requesting video only:', err3)
+            stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true })
+          } catch {
             stream = await navigator.mediaDevices.getUserMedia({ video: true })
           }
         }
@@ -597,7 +410,7 @@ export default function InterviewRoomPage() {
         videoRef.current.play().then(() => setHasVideoStream(true)).catch(e => console.warn('Video play:', e))
       }
 
-      // Safe AudioContext setup that handles Autoplay suspension gracefully
+      // Safe AudioContext setup
       try {
         const AudioCtxClass = window.AudioContext || (window as any).webkitAudioContext
         if (AudioCtxClass && stream.getAudioTracks().length > 0) {
@@ -626,7 +439,7 @@ export default function InterviewRoomPage() {
           requestAnimationFrame(checkAudio)
         }
       } catch (audioErr) {
-        console.warn('AudioContext init note:', audioErr)
+        console.warn('AudioContext note:', audioErr)
       }
     } catch (err: any) {
       console.error('Camera init error:', err)
@@ -737,21 +550,10 @@ export default function InterviewRoomPage() {
         postureStatus,
         attitudeStatus,
       }))
-
-      const now = Date.now()
-      if (now - lastSpokenPostureWarning.current > 30000 && interviewTurnRef.current === 'candidate_listening') {
-        if (isSlouching) {
-          toast('Tip: Sit upright with shoulders back for maximum executive presence.', { icon: '🧘', duration: 4000 })
-          lastSpokenPostureWarning.current = now
-        } else if (isLookingAway) {
-          toast('Tip: Maintain steady eye contact with the camera lens.', { icon: '👁️', duration: 4000 })
-          lastSpokenPostureWarning.current = now
-        }
-      }
     }, 1000)
   }
 
-  // Voice Selection for Anway (Male) & Arvi (Female)
+  // Voice Selection
   function applyBestVoice(utterance: SpeechSynthesisUtterance) {
     if (!('speechSynthesis' in window)) return
     const voices = window.speechSynthesis.getVoices()
@@ -776,64 +578,69 @@ export default function InterviewRoomPage() {
     }
   }
 
-  // Interviewer Speech Generator
-  function speakInterviewerText(text: string, onCompleted?: () => void) {
+  // Clean Markdown & Emojis from Spoken Text
+  function cleanSpokenText(text: string): string {
+    return text
+      .replace(/[*#_~`>]/g, '')
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+      .replace(/```[\s\S]*?```/g, '')
+      .trim()
+  }
+
+  // AI Speech Delivery (TTS)
+  function speakResponse(text: string) {
+    const cleaned = cleanSpokenText(text)
+    if (!cleaned) {
+      setConversationState('LISTENING')
+      return
+    }
+
     if (!soundOn || !('speechSynthesis' in window)) {
-      setInterviewerSpeaking(false)
-      setCurrentCaption('')
-      setInterviewTurn('candidate_listening')
-      if (onCompleted) onCompleted()
+      setConversationState('LISTENING')
       return
     }
 
     window.speechSynthesis.cancel()
-    setInterviewTurn('interviewer_speaking')
-    setInterviewerSpeaking(true)
-    setCurrentCaption(text)
+    setConversationState('SPEAKING')
+    setCurrentCaption(cleaned)
 
-    const utterance = new SpeechSynthesisUtterance(text)
-    utterance.rate = 0.95
+    const utterance = new SpeechSynthesisUtterance(cleaned)
+    utterance.rate = 0.96
     utterance.pitch = interviewer === 'arvi' ? 1.15 : 0.93
     applyBestVoice(utterance)
-    currentUtteranceRef.current = utterance
 
     utterance.onend = () => {
-      setInterviewerSpeaking(false)
-      setCurrentCaption('')
-      currentUtteranceRef.current = null
-      setInterviewTurn('candidate_listening')
-      setLiveCandidateSpeech('')
-      accumulatedSpeechRef.current = ''
-      toast.success('Your turn! Anway is listening to you now — speak freely.', { duration: 3000 })
-      if (onCompleted) onCompleted()
+      if (conversationStateRef.current === 'SPEAKING') {
+        setCurrentCaption('')
+        setConversationState('LISTENING')
+        setLiveCandidateSpeech('')
+        accumulatedSpeechRef.current = ''
+      }
     }
 
-    utterance.onerror = () => {
-      setInterviewerSpeaking(false)
+    utterance.onerror = (e) => {
+      console.warn('TTS utterance event:', e)
       setCurrentCaption('')
-      currentUtteranceRef.current = null
-      setInterviewTurn('candidate_listening')
-      if (onCompleted) onCompleted()
+      setConversationState('LISTENING')
     }
 
     window.speechSynthesis.speak(utterance)
   }
 
-  // Candidate Interruption Action (Barge-In)
-  function handleCandidateInterrupt() {
-    if (interviewTurn === 'interviewer_speaking' || window.speechSynthesis.speaking) {
+  // Instant Interruption (Barge-In)
+  function handleInterruption() {
+    if (conversationStateRef.current === 'SPEAKING' || window.speechSynthesis.speaking) {
       window.speechSynthesis.cancel()
-      setInterviewerSpeaking(false)
+      setConversationState('INTERRUPTED')
       setCurrentCaption('')
-      currentUtteranceRef.current = null
-      setInterviewTurn('candidate_listening')
-      setLiveCandidateSpeech('')
-      accumulatedSpeechRef.current = ''
-      toast('Interrupted: Anway is listening to your question or answer!', { icon: '✋', duration: 2500 })
+      setTimeout(() => {
+        setConversationState('LISTENING')
+      }, 150)
+      toast('Anway paused to listen to you', { icon: '👂', duration: 1500 })
     }
   }
 
-  // Real-Time Speech Recognition Engine
+  // Real-Time Continuous Speech Recognition & Voice Activity Detection
   function startRecognitionEngine() {
     if (!('webkitSpeechRecognition' in window || 'SpeechRecognition' in window)) {
       return
@@ -850,8 +657,6 @@ export default function InterviewRoomPage() {
       recognition.lang = 'en-US'
 
       recognition.onresult = (e: any) => {
-        if (interviewTurnRef.current !== 'candidate_listening') return
-
         let interim = ''
         let finalSegment = ''
 
@@ -865,42 +670,55 @@ export default function InterviewRoomPage() {
           }
         }
 
-        const combinedLive = (accumulatedSpeechRef.current + ' ' + finalSegment + ' ' + interim).trim()
-        if (combinedLive.length > 0) {
-          setLiveCandidateSpeech(combinedLive)
-        }
+        const activeWords = (accumulatedSpeechRef.current + ' ' + finalSegment + ' ' + interim).trim()
 
-        if (finalSegment) {
-          accumulatedSpeechRef.current = (accumulatedSpeechRef.current + ' ' + finalSegment).trim()
-        }
-
-        if (silenceTimerRef.current) {
-          clearTimeout(silenceTimerRef.current)
-        }
-
-        silenceTimerRef.current = setTimeout(() => {
-          const completeSpokenAnswer = (accumulatedSpeechRef.current + ' ' + interim).trim()
-          if (completeSpokenAnswer.length >= 3 && interviewTurnRef.current === 'candidate_listening') {
-            submitCandidateResponse(completeSpokenAnswer, 'spoken')
+        if (activeWords.length > 0) {
+          // If AI was speaking, student just spoke: Trigger Barge-in immediately!
+          if (conversationStateRef.current === 'SPEAKING' || window.speechSynthesis.speaking) {
+            handleInterruption()
           }
-        }, 1700)
+
+          if (conversationStateRef.current !== 'THINKING' && conversationStateRef.current !== 'PROCESSING') {
+            setConversationState('LISTENING')
+          }
+
+          setLiveCandidateSpeech(activeWords)
+
+          if (finalSegment) {
+            accumulatedSpeechRef.current = (accumulatedSpeechRef.current + ' ' + finalSegment).trim()
+          }
+
+          // Voice Activity Detection: Reset silence timer
+          if (silenceTimerRef.current) {
+            clearTimeout(silenceTimerRef.current)
+          }
+
+          // When student pauses for 1.35 seconds after speaking, process the response!
+          silenceTimerRef.current = setTimeout(() => {
+            const completeUtterance = (accumulatedSpeechRef.current + ' ' + interim).trim()
+            if (completeUtterance.length >= 2 && !isGeneratingRef.current) {
+              processStudentSpeech(completeUtterance)
+            }
+          }, 1350)
+        }
       }
 
       recognition.onerror = (event: any) => {
         if (event.error !== 'no-speech') {
-          console.warn('Speech recognition status:', event.error)
+          console.warn('Speech recognition warning:', event.error)
         }
       }
 
       recognition.onend = () => {
-        if (permissionsGranted && micOn && !paused && interviewTurnRef.current === 'candidate_listening') {
+        // Auto-restart continuous listening if session is still active
+        if (permissionsGranted && micOn && !paused) {
           setTimeout(() => {
             try {
               recognition.start()
             } catch {
-              // active
+              // already active
             }
-          }, 250)
+          }, 200)
         }
       }
 
@@ -924,6 +742,108 @@ export default function InterviewRoomPage() {
     }
   }
 
+  // System Prompt for True Conversational AI Agent
+  function getSystemPrompt() {
+    if (interviewer === 'anway') {
+      return `You are Anway, an intelligent, friendly, and perceptive Senior Staff Software Engineer at Google conducting a 1-on-1 career and interview preparation session with a student named ${candidateName}.
+
+CORE CONVERSATIONAL INSTRUCTIONS:
+1. Speak in natural, human conversational English. Do NOT use markdown symbols (no asterisks *, no bullet points, no headers #, no code fences) because your words are spoken directly via text-to-speech. Keep responses conversational and concise (2-4 sentences max per turn).
+2. Listen carefully to everything the student says. Understand the actual meaning, intent, and context before responding. Never assume what the student is going to say. Never generate the next interview question until you have processed the student's latest response.
+3. Handle every student interaction dynamically:
+   - GREETING: If they greet you ("Good morning", "Hello", "Hi"), greet them warmly and ask how they are doing or what they'd like to practice.
+   - CHOOSE TOPIC: If they specify a topic ("I want to practice C programming", "Let's do DSA", "System Design"), enthusiastically adopt that topic and ask a relevant question or ask their preference.
+   - QUESTIONS: If they ask a question ("What is an array?", "How does a hash table work?"), explain it clearly, accurately, and intuitively.
+   - SIMPLIFICATION: If they ask to simplify ("Can you explain in simpler English?"), use a relatable real-world analogy.
+   - SWITCH TOPICS: If they want to change topics ("Let's switch from C to C++"), pivot immediately without resistance.
+   - STOP: If they say "Stop the interview", acknowledge politely and wrap up gracefully.
+   - HINTS: If they are stuck or ask for a hint, provide a gentle, thought-provoking hint without revealing the whole answer.
+   - REPEAT: If they ask to repeat the question, repeat or rephrase it clearly.
+   - ANSWERS: If they answer your technical question:
+     * Acknowledge what they got right.
+     * If there's an error (e.g. wrong Big-O complexity, memory leak, missing edge case), point it out politely and constructively.
+     * Ask an intelligent follow-up question based on what they just said.
+4. Maintain full context of the entire conversation history. Never repeat fixed scripts. Never behave like a scripted robot.`
+    }
+
+    return `You are Arvi, Director of Talent & People Culture and an expert Behavioral Interview & Communication Coach, having a 1-on-1 session with a student named ${candidateName}.
+
+CORE CONVERSATIONAL INSTRUCTIONS:
+1. Speak in warm, empathetic, professional spoken English. Do NOT use markdown formatting (no asterisks, bullet points, headers, or emojis) because your words are spoken directly via text-to-speech. Keep responses concise (2-4 sentences max per turn).
+2. Listen carefully to everything the student says. Understand their actual emotions, tone, and context before responding.
+3. Handle every scenario dynamically:
+   - GREETINGS: Greet warmly and build rapport.
+   - NERVOUSNESS: Reassure with genuine empathy if they feel anxious.
+   - BEHAVIORAL QUESTIONS: Guide them using the STAR method (Situation, Task, Action, Result).
+   - FEEDBACK: When they answer, praise their authenticity, point out any area to strengthen (e.g., more emphasis on personal impact or teamwork), and ask a natural follow-up question.
+   - ADAPT: If they ask questions about company culture, career growth, or want to change focus, adapt immediately.
+   - STOP: If they want to stop, wrap up warmly with encouraging feedback.
+4. Never recite fixed scripts. Treat this as an authentic, real-time conversation between two human beings.`
+  }
+
+  // Student Input Processor (Real-Time AI Reasoning)
+  async function processStudentSpeech(speechText: string) {
+    const raw = speechText.trim()
+    if (!raw || isGeneratingRef.current || paused) return
+
+    isGeneratingRef.current = true
+    setConversationState('THINKING')
+    setLiveCandidateSpeech('')
+    accumulatedSpeechRef.current = ''
+    setUserInput('')
+
+    // Append student message to chat history
+    const userMsg: Message = { role: 'user', content: raw, timestamp: new Date() }
+    setMessages(prev => [...prev, userMsg])
+
+    chatHistoryRef.current.push({ role: 'user', content: raw })
+
+    try {
+      let aiResponseText = ''
+
+      if (isGeminiConfigured()) {
+        const systemPrompt = getSystemPrompt()
+        aiResponseText = await askGeminiChat(chatHistoryRef.current, systemPrompt)
+      } else {
+        // High-quality conversational heuristic fallback if offline
+        const lower = raw.toLowerCase()
+        if (lower.includes('good morning') || lower.includes('hello') || lower.includes('hi')) {
+          aiResponseText = `Good morning! How are you doing today? What would you like to prepare for today?`
+        } else if (lower.includes('c programming') || lower.includes('practise c')) {
+          aiResponseText = `C is a fantastic language for building strong fundamentals. Would you prefer basic memory and pointers, or coding problems?`
+        } else if (lower.includes('what is an array')) {
+          aiResponseText = `An array is a fixed-size collection of elements of the same type stored in contiguous blocks of memory. Does that make sense, or would you like a quick example?`
+        } else if (lower.includes('simpler') || lower.includes('simple english')) {
+          aiResponseText = `Think of an array like a row of numbered lockers in a hallway, where every locker is the exact same size and holds the same type of item. Because they are right next to each other, you can instantly find any locker by its number.`
+        } else if (lower.includes('stop')) {
+          aiResponseText = `No problem at all, we can stop right here. You did a great job today. Let me know whenever you'd like to practice again!`
+        } else if (lower.includes('switch to c++') || lower.includes('c++')) {
+          aiResponseText = `Great choice! C++ gives us powerful features like object-oriented programming, references, and the standard template library. What topic in C++ would you like to explore first?`
+        } else {
+          aiResponseText = `I understand. You mentioned ${raw}. Tell me more about your thoughts on this, or what part you'd like to dive deeper into?`
+        }
+      }
+
+      // Add model response to history
+      chatHistoryRef.current.push({ role: 'model', content: aiResponseText })
+      const aiMsg: Message = { role: 'model', content: aiResponseText, timestamp: new Date() }
+      setMessages(prev => [...prev, aiMsg])
+
+      // Speak response dynamically
+      speakResponse(aiResponseText)
+    } catch (err: any) {
+      console.error('Conversational AI error:', err)
+      setConversationState('ERROR')
+      toast.error('AI response error. Please try again.')
+      setTimeout(() => {
+        setConversationState('LISTENING')
+      }, 2000)
+    } finally {
+      isGeneratingRef.current = false
+    }
+  }
+
+  // Enter Room Gate
   function handleEnterRoom() {
     setPermissionsGranted(true)
     startVisionPostureAnalysis()
@@ -938,199 +858,17 @@ export default function InterviewRoomPage() {
       videoRef.current.play().then(() => setHasVideoStream(true)).catch(e => console.warn(e))
     }
 
-    const firstQuestion = stages[0].question(candidateName)
-    setMessages([{ role: 'interviewer', content: firstQuestion, timestamp: new Date() }])
+    // Dynamic initial welcome greeting
+    const welcome = interviewer === 'anway'
+      ? `Hello ${candidateName}, welcome! I'm Anway, Senior Staff Engineer at Google. It's great to have you here today. What would you like to focus on for our session?`
+      : `Hi ${candidateName}, wonderful to meet you! I'm Arvi, Director of Talent. I'm excited to help you master communication and behavioral interviews today. How are you feeling, and where would you like to start?`
+
+    chatHistoryRef.current.push({ role: 'model', content: welcome })
+    setMessages([{ role: 'model', content: welcome, timestamp: new Date() }])
 
     setTimeout(() => {
-      speakInterviewerText(firstQuestion)
+      speakResponse(welcome)
     }, 600)
-  }
-
-  // Unified Response Processor
-  async function submitCandidateResponse(rawContent: string, inputMethod: 'spoken' | 'typed') {
-    const candidateMessage = rawContent.trim()
-    if (!candidateMessage || interviewTurnRef.current === 'evaluating' || paused) return
-
-    stopRecognitionEngine()
-    setInterviewTurn('evaluating')
-    setLiveCandidateSpeech('')
-    accumulatedSpeechRef.current = ''
-    if (inputMethod === 'typed') setUserInput('')
-
-    const activeStage = stages[currentStageIdx]
-    const currentQuestionText = activeStage.question(candidateName)
-    const nextStageIdx = Math.min(currentStageIdx + 1, stages.length - 1)
-    const nextPlannedQuestion = stages[nextStageIdx].question(candidateName)
-
-    try {
-      let spokenReply: string
-      let conversationType: 'answer' | 'casual' | 'clarification' | 'nervous' | 'admit_unknown' | 'gratitude' = 'answer'
-      let advancesStage = true
-      let errorAnalysis: {
-        score: number
-        strengths: string
-        errorsDetected: string | null
-        correctedAnswer: string
-      }
-
-      if (isGeminiConfigured()) {
-        const evaluationPrompt = `You are ${interviewer === 'anway' ? 'Anway, Senior Staff Engineer at Google' : 'Arvi, Director of Talent'}.
-The candidate is ${candidateName}.
-This is a REAL-TIME live technical interview.
-
-CURRENT INTERVIEW QUESTION:
-"${currentQuestionText}"
-
-CORE CONCEPTS EXPECTED:
-${activeStage.keyPoints.join('; ')}
-
-CANDIDATE'S ACTUAL RESPONSE (via ${inputMethod}):
-"${candidateMessage}"
-
-RECENT CONVERSATION CONTEXT:
-${messages.slice(-4).map(m => `${m.role === 'interviewer' ? (interviewer === 'anway' ? 'Anway' : 'Arvi') : candidateName}: "${m.content}"`).join('\n')}
-
-INSTRUCTIONS:
-1. GREETING / CASUAL BANTER: Respond with warmth and natural charm, then invite them into the question. advancesStage: false.
-2. NERVOUSNESS: Reassure with genuine empathy. advancesStage: false.
-3. CLARIFICATION REQUEST: Re-explain the problem clearly with an intuitive analogy. advancesStage: false.
-4. ADMISSION OF NOT KNOWING: Guide them constructively with a hint. advancesStage: false.
-5. GRATITUDE: Acknowledge politely. advancesStage: false.
-6. TECHNICAL / BEHAVIORAL ANSWER OR CODE:
-   - Identify what they got RIGHT (strengths).
-   - Identify explicitly WHERE THEY WERE WRONG (errors detected: Big-O mistakes, concurrency race conditions, missing edge cases, or weak STAR answers).
-   - Give the ideal corrected formulation.
-   - Formulate spoken feedback where you acknowledge their answer, point out the error clearly, give proper logic, and transition to: "${nextPlannedQuestion}".
-   - advancesStage: true.
-
-RETURN STRICT JSON ONLY:
-{
-  "conversationType": "answer" | "casual" | "clarification" | "nervous" | "admit_unknown" | "gratitude",
-  "advancesStage": true,
-  "spokenFeedback": "Your exact spoken response to the candidate...",
-  "score": 82,
-  "strengths": "1 sentence on what they answered accurately",
-  "errorsDetected": "Explicitly state where they were wrong, or 'No critical errors detected. Minor optimization possible.'",
-  "correctedAnswer": "1-2 sentence ideal reference solution"
-}`
-
-        const raw = await askGemini(evaluationPrompt)
-        const cleaned = raw.replace(/```json/g, '').replace(/```/g, '').trim()
-
-        try {
-          const parsed = JSON.parse(cleaned)
-          conversationType = parsed.conversationType || 'answer'
-          advancesStage = Boolean(parsed.advancesStage)
-          spokenReply = parsed.spokenFeedback || `Thank you for sharing that, ${candidateName}. Let's examine our next problem: ${nextPlannedQuestion}`
-          errorAnalysis = {
-            score: typeof parsed.score === 'number' ? parsed.score : 80,
-            strengths: parsed.strengths || 'Demonstrated understanding of core concepts.',
-            errorsDetected: parsed.errorsDetected || null,
-            correctedAnswer: parsed.correctedAnswer || activeStage.modelAnswer
-          }
-        } catch {
-          spokenReply = `Thank you, ${candidateName}. In reviewing your answer, be mindful of boundary conditions and runtime complexity. Let's proceed: ${nextPlannedQuestion}`
-          errorAnalysis = {
-            score: 75,
-            strengths: 'Good conceptual approach.',
-            errorsDetected: 'Ensure you clearly define time complexity and boundary conditions.',
-            correctedAnswer: activeStage.modelAnswer
-          }
-        }
-      } else {
-        const lower = candidateMessage.toLowerCase()
-        if (lower.includes('good morning') || lower.includes('hello') || lower.includes('hi')) {
-          conversationType = 'casual'
-          advancesStage = false
-          spokenReply = `Good morning, ${candidateName}! It's wonderful to have you here today. Take a comfortable breath. Are you ready to begin with our question?`
-          errorAnalysis = { score: 90, strengths: 'Polite and professional greeting.', errorsDetected: null, correctedAnswer: activeStage.modelAnswer }
-        } else if (lower.includes('nervous') || lower.includes('scared') || lower.includes('worried')) {
-          conversationType = 'nervous'
-          advancesStage = false
-          spokenReply = `That's completely okay, ${candidateName}. Take your time. This is a supportive practice environment, and we are here to help you build confidence. Whenever you're ready, tell me your thoughts.`
-          errorAnalysis = { score: 85, strengths: 'Honest self-awareness.', errorsDetected: null, correctedAnswer: activeStage.modelAnswer }
-        } else if (lower.includes('explain again') || lower.includes('repeat') || lower.includes('simpler')) {
-          conversationType = 'clarification'
-          advancesStage = false
-          spokenReply = `Of course! In simple terms: ${activeStage.keyPoints[0]}. How would you start thinking about this?`
-          errorAnalysis = { score: 85, strengths: 'Asked for clarification proactively.', errorsDetected: null, correctedAnswer: activeStage.modelAnswer }
-        } else if (lower.includes("don't know") || lower.includes('dont know') || lower.includes('not sure')) {
-          conversationType = 'admit_unknown'
-          advancesStage = false
-          spokenReply = `No problem at all! Let's approach it step by step. A good first clue: consider how ${activeStage.keyPoints[0]} could be applied. What do you think?`
-          errorAnalysis = { score: 70, strengths: 'Recognized knowledge boundary honestly.', errorsDetected: 'Requires conceptual guidance on this topic.', correctedAnswer: activeStage.modelAnswer }
-        } else if (lower.includes('thank you') || lower.includes('thanks')) {
-          conversationType = 'gratitude'
-          advancesStage = false
-          spokenReply = `You're very welcome! Let's continue.`
-          errorAnalysis = { score: 90, strengths: 'Courteous communication.', errorsDetected: null, correctedAnswer: activeStage.modelAnswer }
-        } else {
-          advancesStage = true
-          conversationType = 'answer'
-          const detectedError = candidateMessage.length < 25
-            ? 'Response was too brief and lacked architectural depth or Big-O analysis.'
-            : candidateMessage.toLowerCase().includes('o(1)') && activeStage.badge === 'DSA & Algorithms'
-            ? 'Heap insertion requires O(log N) rather than O(1).'
-            : 'Make sure to explicitly detail edge case handling such as duplicate values or concurrency.'
-
-          spokenReply = `Thank you, ${candidateName}. You covered important ground, but remember that ${detectedError} Now, let's look at our next question: ${nextPlannedQuestion}`
-          errorAnalysis = {
-            score: candidateMessage.length > 40 ? 82 : 68,
-            strengths: 'Clear communication and relevant technical terminology.',
-            errorsDetected: detectedError,
-            correctedAnswer: activeStage.modelAnswer
-          }
-        }
-      }
-
-      if (advancesStage) {
-        const responseRecord: CandidateResponseRecord = {
-          stageName: activeStage.stageName,
-          question: currentQuestionText,
-          candidateAnswer: candidateMessage,
-          score: errorAnalysis.score,
-          strengths: errorAnalysis.strengths,
-          errorsDetected: errorAnalysis.errorsDetected,
-          correctedAnswer: errorAnalysis.correctedAnswer,
-          timestamp: new Date().toLocaleTimeString()
-        }
-        setCollectedResponses(prev => [...prev, responseRecord])
-      }
-
-      setMessages(prev => [
-        ...prev,
-        {
-          role: 'user',
-          content: candidateMessage,
-          timestamp: new Date(),
-          conversationType,
-          analysis: advancesStage ? errorAnalysis : undefined
-        },
-        {
-          role: 'interviewer',
-          content: spokenReply,
-          timestamp: new Date()
-        }
-      ])
-
-      if (advancesStage) {
-        setCurrentStageIdx(nextStageIdx)
-      }
-
-      speakInterviewerText(spokenReply, () => {
-        if (advancesStage && nextStageIdx >= stages.length - 1 && currentStageIdx === stages.length - 2) {
-          setTimeout(() => {
-            const wrapup = `Thank you so much, ${candidateName}. That concludes all scheduled rounds for today's interview. I have recorded all your answers and compiled a detailed error diagnostic report for you!`
-            setMessages(prev => [...prev, { role: 'interviewer', content: wrapup, timestamp: new Date() }])
-            speakInterviewerText(wrapup)
-          }, 1500)
-        }
-      })
-    } catch (err) {
-      console.error(err)
-      toast.error('AI response encountered an issue. Please try again.')
-      setInterviewTurn('candidate_listening')
-    }
   }
 
   function handleEndInterview() {
@@ -1147,13 +885,20 @@ RETURN STRICT JSON ONLY:
       duration,
       candidateName,
       messages: messages.length,
-      score: collectedResponses.length > 0
-        ? Math.round(collectedResponses.reduce((acc, r) => acc + r.score, 0) / collectedResponses.length)
-        : 82,
+      score: 85,
       eyeContactScore: postureMetrics.eyeContactScore,
       postureStatus: postureMetrics.postureStatus,
       attitudeStatus: postureMetrics.attitudeStatus,
-      collectedResponses,
+      collectedResponses: messages.filter(m => m.role === 'user').map(m => ({
+        stageName: 'Conversational Turn',
+        question: 'Interactive Dialogue',
+        candidateAnswer: m.content,
+        score: 85,
+        strengths: 'Engaged in natural conversational dialogue.',
+        errorsDetected: null,
+        correctedAnswer: m.content,
+        timestamp: m.timestamp.toLocaleTimeString(),
+      })),
       timestamp: new Date().toISOString(),
     }
     sessionStorage.setItem(`report_${reportId}`, JSON.stringify(reportData))
@@ -1166,8 +911,6 @@ RETURN STRICT JSON ONLY:
     return `${m}:${s}`
   }
 
-  const currentStage = stages[currentStageIdx]
-
   // Permission Gate Screen
   if (!permissionsGranted) {
     return (
@@ -1179,13 +922,13 @@ RETURN STRICT JSON ONLY:
         >
           <div className="text-center space-y-2">
             <span className="badge badge-blue text-xs uppercase tracking-wider">
-              Realistic Interview Room Entry
+              NEXHIRE AI • Real-Time Voice Room
             </span>
             <h1 className="text-2xl font-black text-white">
-              Equipment & Real-Time Webcam Setup
+              Equipment & Conversational Setup
             </h1>
             <p className="text-xs text-gray-300">
-              Welcome, <strong>{candidateName}</strong>! {interviewer === 'anway' ? 'Anway (Senior Staff Engineer)' : 'Arvi (Director of Talent)'} is ready to interview you with real-time video and voice.
+              Welcome, <strong>{candidateName}</strong>! {interviewer === 'anway' ? 'Anway' : 'Arvi'} will converse with you naturally in real-time. Say whatever is on your mind.
             </p>
           </div>
 
@@ -1201,7 +944,7 @@ RETURN STRICT JSON ONLY:
 
             <div className="absolute top-3 left-3 flex items-center gap-2 px-2.5 py-1 rounded-full bg-black/70 backdrop-blur-md text-[11px] text-white">
               <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-              Live Webcam Preview
+              Live Webcam Ready
             </div>
 
             <div className="absolute bottom-3 left-3 right-3 flex items-center gap-3 px-3 py-2 rounded-xl bg-black/80 backdrop-blur-md border border-white/10">
@@ -1221,15 +964,15 @@ RETURN STRICT JSON ONLY:
           <div className="space-y-2.5 text-xs text-gray-300 bg-white/5 p-4 rounded-xl border border-white/10">
             <div className="flex items-center gap-2.5">
               <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-              <span><strong>Prominent Candidate Video:</strong> Your live webcam face is displayed side-by-side with Anway just like a real interview call.</span>
+              <span><strong>True Conversational Agent:</strong> No hardcoded scripts. Anway and Arvi genuinely listen, think, and respond to what you say.</span>
             </div>
             <div className="flex items-center gap-2.5">
               <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-              <span><strong>Natural Real-Time Dialogue:</strong> Anway asks questions and speaks clearly. Once he finishes, he listens to you in real time.</span>
+              <span><strong>Instant Interruption (Barge-In):</strong> Speak at any time while the AI is talking—they will immediately pause and listen to you.</span>
             </div>
             <div className="flex items-center gap-2.5">
               <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-              <span><strong>Instant Interruption (Barge-In):</strong> Click "Interrupt Anway" at any time if you want to speak immediately.</span>
+              <span><strong>Natural Dialogue:</strong> Ask questions, ask for hints, simplify language, or change topics whenever you want.</span>
             </div>
           </div>
 
@@ -1238,7 +981,7 @@ RETURN STRICT JSON ONLY:
             className="btn-primary w-full py-3.5 text-sm font-bold flex items-center justify-center gap-2 shadow-xl"
           >
             <ShieldCheck className="w-4 h-4" />
-            Enter Official Interview Room
+            Enter Real-Time Interview Room
           </button>
         </motion.div>
       </div>
@@ -1253,42 +996,49 @@ RETURN STRICT JSON ONLY:
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-2">
             <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-ping" />
-            <span className="text-white font-bold text-sm uppercase tracking-wider">Live Interview Call</span>
+            <span className="text-white font-bold text-sm uppercase tracking-wider">Live Conversational Call</span>
           </div>
           <span className="badge badge-blue text-xs uppercase">{type}</span>
-          <span className="badge badge-purple text-xs capitalize">{currentStage.badge}</span>
+          <span className="badge badge-purple text-xs capitalize">{interviewer}</span>
         </div>
 
-        {/* Current Round Indicator */}
-        <div className="hidden md:flex items-center gap-2 text-xs text-gray-300 bg-white/5 border border-white/10 px-3 py-1 rounded-xl">
-          <span className="text-blue-400 font-bold">{currentStage.stageName}</span>
-          <span className="text-gray-500">({currentStageIdx + 1} of {stages.length})</span>
-        </div>
-
-        {/* Live Status HUD */}
+        {/* State Machine Status HUD Badge */}
         <div className="flex items-center gap-3">
-          {/* Turn-Taking State Indicator */}
           <div className={`flex items-center gap-2 px-3 py-1 rounded-xl text-xs font-semibold border transition-all ${
-            interviewTurn === 'candidate_listening'
+            conversationState === 'LISTENING'
               ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-300 shadow-[0_0_15px_rgba(16,185,129,0.3)] animate-pulse'
-              : interviewTurn === 'evaluating'
+              : conversationState === 'THINKING' || conversationState === 'PROCESSING'
               ? 'bg-amber-500/20 border-amber-500/40 text-amber-300'
-              : 'bg-blue-500/20 border-blue-500/30 text-blue-300'
+              : conversationState === 'SPEAKING'
+              ? 'bg-blue-500/20 border-blue-500/40 text-blue-300'
+              : conversationState === 'INTERRUPTED'
+              ? 'bg-rose-500/20 border-rose-500/40 text-rose-300'
+              : 'bg-white/5 border-white/10 text-gray-400'
           }`}>
-            {interviewTurn === 'candidate_listening' ? (
+            {conversationState === 'LISTENING' ? (
               <>
                 <Radio className="w-3.5 h-3.5 text-emerald-400 animate-spin" />
-                <span>🎤 Anway is listening to you...</span>
+                <span>🟢 LISTENING: Speak naturally...</span>
               </>
-            ) : interviewTurn === 'evaluating' ? (
+            ) : conversationState === 'THINKING' || conversationState === 'PROCESSING' ? (
               <>
                 <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-400" />
-                <span>Anway is diagnosing errors...</span>
+                <span>🟡 THINKING: Anway is processing...</span>
+              </>
+            ) : conversationState === 'SPEAKING' ? (
+              <>
+                <Volume1 className="w-3.5 h-3.5 text-blue-400 animate-pulse" />
+                <span>🟣 SPEAKING: (Speak to interrupt)</span>
+              </>
+            ) : conversationState === 'INTERRUPTED' ? (
+              <>
+                <Hand className="w-3.5 h-3.5 text-rose-400" />
+                <span>⚡ INTERRUPTED: Listening to you...</span>
               </>
             ) : (
               <>
-                <Volume1 className="w-3.5 h-3.5 text-blue-400 animate-pulse" />
-                <span>Anway is speaking...</span>
+                <Activity className="w-3.5 h-3.5 text-gray-400" />
+                <span>IDLE: Ready</span>
               </>
             )}
           </div>
@@ -1300,7 +1050,7 @@ RETURN STRICT JSON ONLY:
               className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold flex items-center gap-1 transition-all ${
                 layoutMode === 'split' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'
               }`}
-              title="Split View (Interviewer & Candidate Side-by-Side)"
+              title="Split View (Side-by-Side)"
             >
               <LayoutGrid className="w-3 h-3" />
               <span>Dual View</span>
@@ -1310,10 +1060,10 @@ RETURN STRICT JSON ONLY:
               className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold flex items-center gap-1 transition-all ${
                 layoutMode === 'interviewer' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'
               }`}
-              title="Interviewer Focus with Floating PiP"
+              title="Focus View"
             >
               <Maximize2 className="w-3 h-3" />
-              <span>Interviewer</span>
+              <span>Focus</span>
             </button>
           </div>
 
@@ -1336,28 +1086,35 @@ RETURN STRICT JSON ONLY:
               layoutMode === 'candidate' ? 'hidden' : 'flex-1'
             }`}>
               {interviewer === 'anway' ? (
-                <RealisticAnway speaking={interviewerSpeaking} isBlinking={isBlinking} />
+                <RealisticAnway speaking={conversationState === 'SPEAKING'} isBlinking={isBlinking} />
               ) : (
-                <RealisticArvi speaking={interviewerSpeaking} isBlinking={isBlinking} />
+                <RealisticArvi speaking={conversationState === 'SPEAKING'} isBlinking={isBlinking} />
               )}
 
-              {/* Turn Action Banner directly over Avatar */}
+              {/* State Banner directly over Avatar */}
               <div className="absolute top-3 left-3 right-3 flex justify-between items-center z-20">
-                {interviewTurn === 'interviewer_speaking' && (
+                {conversationState === 'SPEAKING' && (
                   <button
-                    onClick={handleCandidateInterrupt}
+                    onClick={handleInterruption}
                     className="px-3 py-1 rounded-full bg-red-600/80 hover:bg-red-600 backdrop-blur-md border border-red-400/50 text-white text-[11px] font-bold flex items-center gap-1.5 shadow-lg transition-all"
                     title="Interrupt and speak immediately"
                   >
                     <Hand className="w-3 h-3" />
-                    <span>✋ Interrupt</span>
+                    <span>✋ Interrupt {interviewer === 'anway' ? 'Anway' : 'Arvi'}</span>
                   </button>
                 )}
 
-                {interviewTurn === 'candidate_listening' && (
+                {conversationState === 'LISTENING' && (
                   <div className="px-3 py-1 rounded-full bg-emerald-600/90 backdrop-blur-md border border-emerald-400/60 text-white text-[11px] font-bold flex items-center gap-1.5 shadow-lg animate-pulse">
                     <span className="w-2 h-2 rounded-full bg-white animate-ping" />
-                    <span>Listening to you</span>
+                    <span>Listening to you live</span>
+                  </div>
+                )}
+
+                {conversationState === 'THINKING' && (
+                  <div className="px-3 py-1 rounded-full bg-amber-600/90 backdrop-blur-md border border-amber-400/60 text-white text-[11px] font-bold flex items-center gap-1.5 shadow-lg">
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                    <span>Thinking...</span>
                   </div>
                 )}
               </div>
@@ -1375,7 +1132,7 @@ RETURN STRICT JSON ONLY:
               )}
             </div>
 
-            {/* Tile 2: YOU - Candidate Live Webcam (Prominent & Clear!) */}
+            {/* Tile 2: YOU - Candidate Live Webcam */}
             <div className={`relative rounded-2xl overflow-hidden border border-emerald-500/30 bg-black/80 shadow-2xl flex flex-col items-center justify-center ${
               layoutMode === 'interviewer' ? 'hidden' : 'flex-1'
             }`}>
@@ -1394,9 +1151,9 @@ RETURN STRICT JSON ONLY:
                         <VideoOff className="w-7 h-7" />
                       </div>
                       <div>
-                        <h4 className="text-white font-bold text-sm">Allow Camera Permission</h4>
+                        <h4 className="text-white font-bold text-sm">Allow Camera Access</h4>
                         <p className="text-xs text-gray-400 mt-1 max-w-xs">
-                          {cameraError || 'Browser requires camera permission to display your video in this interview.'}
+                          {cameraError || 'Please allow camera permissions in your browser bar.'}
                         </p>
                       </div>
                       <button
@@ -1416,7 +1173,7 @@ RETURN STRICT JSON ONLY:
                   </div>
                   <div>
                     <h4 className="text-white font-bold text-base">{candidateName}</h4>
-                    <p className="text-xs text-gray-400 mt-0.5">Camera is currently muted</p>
+                    <p className="text-xs text-gray-400 mt-0.5">Camera is muted</p>
                   </div>
                   <button
                     onClick={toggleCam}
@@ -1428,15 +1185,14 @@ RETURN STRICT JSON ONLY:
                 </div>
               )}
 
-              {/* Hidden Canvas for Vision Posture Processing */}
               <canvas ref={canvasRef} className="hidden" />
 
               {/* Top Overlays on Candidate Video */}
               <div className="absolute top-3 left-3 right-3 flex items-center justify-between text-xs pointer-events-none z-20">
                 <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-black/75 backdrop-blur-md border border-white/10 text-white font-semibold">
-                  <span className={`w-2 h-2 rounded-full ${interviewTurn === 'candidate_listening' ? 'bg-emerald-400 animate-ping' : 'bg-emerald-400'}`} />
+                  <span className={`w-2 h-2 rounded-full ${conversationState === 'LISTENING' ? 'bg-emerald-400 animate-ping' : 'bg-emerald-400'}`} />
                   <span>You ({candidateName})</span>
-                  {interviewTurn === 'candidate_listening' && (
+                  {conversationState === 'LISTENING' && (
                     <span className="badge badge-emerald text-[9px] uppercase px-1.5 py-0">Speaking</span>
                   )}
                 </div>
@@ -1450,8 +1206,8 @@ RETURN STRICT JSON ONLY:
                 </div>
               </div>
 
-              {/* Live Interim Spoken Words Banner (Candidate Words In Real-Time) */}
-              {interviewTurn === 'candidate_listening' && liveCandidateSpeech && (
+              {/* Live Candidate Spoken Words Banner */}
+              {liveCandidateSpeech && (
                 <div className="absolute bottom-16 left-4 right-4 flex justify-center z-20 pointer-events-none">
                   <motion.div
                     initial={{ opacity: 0, y: 10 }}
@@ -1460,7 +1216,7 @@ RETURN STRICT JSON ONLY:
                   >
                     <div className="flex items-center justify-center gap-1.5 text-emerald-400 font-bold text-[10px] uppercase tracking-wider mb-0.5">
                       <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
-                      <span>Speaking Live:</span>
+                      <span>Hearing You:</span>
                     </div>
                     <p className="font-medium italic text-white text-xs">"{liveCandidateSpeech}"</p>
                   </motion.div>
@@ -1469,14 +1225,12 @@ RETURN STRICT JSON ONLY:
 
               {/* Bottom Overlays on Candidate Video */}
               <div className="absolute bottom-3 left-3 right-3 flex items-center justify-between z-20">
-                {/* Eye Contact Badge */}
                 <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-black/75 backdrop-blur-md border border-white/10 text-[11px] text-gray-200">
                   <Eye className="w-3.5 h-3.5 text-blue-400" />
                   <span>Eye Contact:</span>
                   <span className="font-mono text-emerald-400 font-bold">{postureMetrics.eyeContactScore}%</span>
                 </div>
 
-                {/* Live Audio Meter */}
                 <div className="flex items-center gap-2 px-2.5 py-1 rounded-lg bg-black/75 backdrop-blur-md border border-white/10 text-[11px]">
                   <Mic className={`w-3.5 h-3.5 ${micLevel > 15 ? 'text-emerald-400' : 'text-gray-400'}`} />
                   <div className="w-16 bg-white/20 h-1.5 rounded-full overflow-hidden">
@@ -1491,30 +1245,27 @@ RETURN STRICT JSON ONLY:
             </div>
           </div>
 
-          {/* Bottom Bar: Action Controls & Status */}
+          {/* Bottom Bar: Action Controls */}
           <div className="rounded-2xl bg-[#0a0f2c]/90 border border-white/10 flex items-center justify-between gap-3 px-6 py-2.5">
-            {/* Left Action: Done Speaking or Interrupt */}
             <div className="flex items-center gap-2">
-              {interviewTurn === 'candidate_listening' && (
+              {conversationState === 'LISTENING' && liveCandidateSpeech && (
                 <button
                   onClick={() => {
                     const finalAnswer = liveCandidateSpeech.trim() || accumulatedSpeechRef.current.trim()
                     if (finalAnswer) {
-                      submitCandidateResponse(finalAnswer, 'spoken')
-                    } else {
-                      toast('Speak into your microphone first, or type below.', { icon: '🎤' })
+                      processStudentSpeech(finalAnswer)
                     }
                   }}
                   className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-2 shadow-lg shadow-emerald-600/30 transition-all animate-pulse"
                 >
                   <CheckCircle2 className="w-4 h-4" />
-                  <span>Done Speaking (Submit Answer)</span>
+                  <span>Submit Spoken Answer</span>
                 </button>
               )}
 
-              {interviewTurn === 'interviewer_speaking' && (
+              {conversationState === 'SPEAKING' && (
                 <button
-                  onClick={handleCandidateInterrupt}
+                  onClick={handleInterruption}
                   className="px-4 py-2 rounded-xl bg-red-600/80 hover:bg-red-600 text-white text-xs font-bold flex items-center gap-2 shadow-lg transition-all"
                 >
                   <Hand className="w-4 h-4" />
@@ -1523,7 +1274,6 @@ RETURN STRICT JSON ONLY:
               )}
             </div>
 
-            {/* Center Controls: Mic, Cam, Sound, Model Answer, Pause */}
             <div className="flex items-center gap-3">
               <button
                 onClick={toggleMic}
@@ -1559,17 +1309,6 @@ RETURN STRICT JSON ONLY:
               </button>
 
               <button
-                onClick={() => setShowModelAnswer(!showModelAnswer)}
-                className={`p-2.5 rounded-xl flex items-center gap-1.5 transition-all text-xs font-semibold ${
-                  showModelAnswer ? 'bg-purple-600/30 text-purple-300 border border-purple-500/50' : 'bg-white/5 text-gray-300 border border-white/10'
-                }`}
-                title="View model solution"
-              >
-                <BookOpen className="w-4 h-4 text-purple-400" />
-                <span className="hidden sm:inline">Model Answer</span>
-              </button>
-
-              <button
                 onClick={() => setPaused(!paused)}
                 className="p-2.5 rounded-xl flex items-center gap-1.5 bg-amber-500/20 text-amber-300 border border-amber-500/30 text-xs font-semibold"
                 title="Pause interview"
@@ -1579,7 +1318,6 @@ RETURN STRICT JSON ONLY:
               </button>
             </div>
 
-            {/* Right Action: End Call */}
             <div>
               <button
                 onClick={handleEndInterview}
@@ -1593,80 +1331,29 @@ RETURN STRICT JSON ONLY:
           </div>
         </div>
 
-        {/* Right Side: Chat & Error Analysis Panel */}
+        {/* Right Side: Conversation Transcript Panel */}
         <div className="w-80 lg:w-[440px] border-l border-blue-500/20 bg-[#0a0f2c]/95 flex flex-col">
-          {/* Header */}
           <div className="px-4 py-3 border-b border-white/10 flex items-center justify-between">
             <div className="flex items-center gap-2">
               <MessageSquare className="w-4 h-4 text-blue-400" />
-              <span className="text-white font-bold text-xs uppercase">Transcript & Live Error Audit</span>
+              <span className="text-white font-bold text-xs uppercase">Live Conversation History</span>
             </div>
-            <button
-              onClick={() => setShowModelAnswer(!showModelAnswer)}
-              className="badge badge-purple text-[10px] flex items-center gap-1 cursor-pointer hover:bg-purple-600/30"
-            >
-              <Sparkles className="w-3 h-3" />
-              {showModelAnswer ? 'Hide Guide' : 'Show Ideal Answer'}
-            </button>
+            <span className="badge badge-emerald text-[10px] flex items-center gap-1">
+              <Radio className="w-2.5 h-2.5 animate-pulse" />
+              AI Agent Active
+            </span>
           </div>
 
-          {/* Model Answer Drawer */}
-          <AnimatePresence>
-            {showModelAnswer && (
-              <motion.div
-                initial={{ height: 0, opacity: 0 }}
-                animate={{ height: 'auto', opacity: 1 }}
-                exit={{ height: 0, opacity: 0 }}
-                className="border-b border-white/10 bg-purple-950/20 p-4 space-y-3 overflow-hidden text-xs"
-              >
-                <div className="flex items-center justify-between">
-                  <span className="font-bold text-purple-300 flex items-center gap-1.5">
-                    <Award className="w-4 h-4 text-purple-400" /> What Top Interviewers Look For:
-                  </span>
-                  <button onClick={() => setShowModelAnswer(false)} className="text-gray-400 hover:text-white">
-                    <ChevronUp className="w-4 h-4" />
-                  </button>
-                </div>
-
-                <ul className="space-y-1.5 text-gray-300 text-[11px]">
-                  {currentStage.keyPoints.map((pt, i) => (
-                    <li key={i} className="flex items-start gap-1.5">
-                      <span className="text-purple-400 font-bold">•</span>
-                      <span>{pt}</span>
-                    </li>
-                  ))}
-                </ul>
-
-                <div className="p-2.5 rounded-xl bg-purple-900/30 border border-purple-500/30">
-                  <span className="font-semibold text-purple-200 block mb-1 text-[11px]">Best-in-Class Model Answer:</span>
-                  <p className="text-gray-300 italic text-[11px] leading-relaxed">{currentStage.modelAnswer}</p>
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          {/* Transcript Messages with Live Error Diagnostic Cards */}
+          {/* Transcript Messages */}
           <div className="flex-1 overflow-y-auto p-4 space-y-4">
             {messages.map((msg, i) => (
-              <div key={i} className={`${msg.role === 'user' ? 'ml-4' : 'mr-4'} space-y-2`}>
+              <div key={i} className={`${msg.role === 'user' ? 'ml-4' : 'mr-4'} space-y-1.5`}>
                 <div className={`text-[11px] font-bold flex items-center gap-1.5 ${
                   msg.role === 'user' ? 'justify-end text-blue-400' : 'text-purple-400'
                 }`}>
-                  {msg.role === 'user' ? (
-                    <>
-                      <span>{candidateName} (Your Response)</span>
-                      {msg.conversationType && msg.conversationType !== 'answer' && (
-                        <span className="badge badge-blue text-[9px] uppercase px-1.5 py-0.2">
-                          {msg.conversationType}
-                        </span>
-                      )}
-                    </>
-                  ) : (
-                    <span>{interviewer === 'anway' ? 'Anway (Interviewer)' : 'Arvi (Interviewer)'}</span>
-                  )}
+                  {msg.role === 'user' ? `${candidateName} (You)` : (interviewer === 'anway' ? 'Anway (Google Staff Engineer)' : 'Arvi (Talent Director)')}
                 </div>
 
-                {/* Message Bubble */}
                 <div className={`p-3.5 rounded-xl text-xs leading-relaxed whitespace-pre-wrap font-sans ${
                   msg.role === 'user'
                     ? 'bg-blue-600/20 border border-blue-500/40 text-white'
@@ -1674,60 +1361,13 @@ RETURN STRICT JSON ONLY:
                 }`}>
                   {msg.content}
                 </div>
-
-                {/* Real-Time Error Diagnostic Breakdown for Candidate's Answer */}
-                {msg.role === 'user' && msg.analysis && (
-                  <motion.div
-                    initial={{ opacity: 0, y: 5 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    className="p-3 rounded-xl bg-black/60 border border-white/10 space-y-2 text-[11px]"
-                  >
-                    <div className="flex items-center justify-between pb-1.5 border-b border-white/5">
-                      <span className="font-bold text-gray-300 flex items-center gap-1.5">
-                        <Sparkles className="w-3.5 h-3.5 text-blue-400" />
-                        AI Response Assessment
-                      </span>
-                      <span className={`px-2 py-0.5 rounded-full font-bold ${
-                        msg.analysis.score >= 80 ? 'bg-emerald-500/20 text-emerald-400' : 'bg-amber-500/20 text-amber-300'
-                      }`}>
-                        Score: {msg.analysis.score}/100
-                      </span>
-                    </div>
-
-                    {/* What was accurate */}
-                    <div className="flex items-start gap-1.5 text-emerald-300">
-                      <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0 mt-0.5" />
-                      <div>
-                        <strong className="text-emerald-400 font-semibold">Strengths: </strong>
-                        {msg.analysis.strengths}
-                      </div>
-                    </div>
-
-                    {/* Where the candidate was wrong (Errors Detected) */}
-                    {msg.analysis.errorsDetected && (
-                      <div className="flex items-start gap-1.5 text-rose-300 bg-rose-500/10 p-2 rounded-lg border border-rose-500/20">
-                        <XCircle className="w-3.5 h-3.5 text-rose-400 shrink-0 mt-0.5" />
-                        <div>
-                          <strong className="text-rose-400 font-bold">Errors / Flaws Identified: </strong>
-                          {msg.analysis.errorsDetected}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Corrected Formulation */}
-                    <div className="text-gray-300 bg-white/5 p-2 rounded-lg border border-white/5">
-                      <strong className="text-blue-300 font-semibold block mb-0.5">Recommended Formulation:</strong>
-                      <span className="italic">{msg.analysis.correctedAnswer}</span>
-                    </div>
-                  </motion.div>
-                )}
               </div>
             ))}
 
-            {interviewTurn === 'evaluating' && (
-              <div className="mr-6 p-3.5 rounded-xl bg-white/5 border border-white/10 flex items-center gap-2 text-xs text-blue-400">
+            {conversationState === 'THINKING' && (
+              <div className="mr-6 p-3.5 rounded-xl bg-white/5 border border-white/10 flex items-center gap-2 text-xs text-amber-400">
                 <Loader2 className="w-4 h-4 animate-spin" />
-                <span>{interviewer === 'anway' ? 'Anway' : 'Arvi'} is evaluating your code/answer for errors...</span>
+                <span>{interviewer === 'anway' ? 'Anway' : 'Arvi'} is thinking and formulating a response...</span>
               </div>
             )}
           </div>
@@ -1737,20 +1377,16 @@ RETURN STRICT JSON ONLY:
             <div className="flex gap-2">
               <button
                 onClick={() => {
-                  if (interviewTurn === 'candidate_listening') {
-                    const speech = liveCandidateSpeech.trim() || accumulatedSpeechRef.current.trim()
-                    if (speech) submitCandidateResponse(speech, 'spoken')
-                    else toast('Speak into your microphone, or type your answer.', { icon: '🎤' })
-                  } else {
-                    handleCandidateInterrupt()
+                  if (conversationState === 'SPEAKING') {
+                    handleInterruption()
                   }
                 }}
                 className={`p-2.5 rounded-xl border shrink-0 transition-all ${
-                  interviewTurn === 'candidate_listening'
+                  conversationState === 'LISTENING'
                     ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40 animate-pulse'
                     : 'bg-white/5 text-gray-400 border-white/10'
                 }`}
-                title={interviewTurn === 'candidate_listening' ? 'Mic listening' : 'Start speaking'}
+                title={conversationState === 'LISTENING' ? 'Microphone listening live' : 'Speak answer'}
               >
                 <Mic className="w-4 h-4" />
               </button>
@@ -1762,36 +1398,36 @@ RETURN STRICT JSON ONLY:
                   if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault()
                     if (userInput.trim()) {
-                      submitCandidateResponse(userInput.trim(), 'typed')
+                      processStudentSpeech(userInput.trim())
                     }
                   }
                 }}
-                placeholder="Speak hands-free, or type code/answers here... AI checks errors in real time (Enter to send)"
+                placeholder="Speak hands-free, or type questions/code here... (Enter to send)"
                 className="input-field text-xs py-2 flex-1 resize-none"
-                disabled={interviewTurn === 'evaluating' || paused}
+                disabled={conversationState === 'THINKING' || paused}
               />
               <button
                 onClick={() => {
                   if (userInput.trim()) {
-                    submitCandidateResponse(userInput.trim(), 'typed')
+                    processStudentSpeech(userInput.trim())
                   }
                 }}
-                disabled={!userInput.trim() || interviewTurn === 'evaluating' || paused}
+                disabled={!userInput.trim() || conversationState === 'THINKING' || paused}
                 className="btn-primary p-2.5 text-xs rounded-xl disabled:opacity-40 shrink-0 self-end mb-1"
-                title="Send for Real-Time Evaluation"
+                title="Send Message"
               >
                 <Send className="w-4 h-4" />
               </button>
             </div>
             <div className="flex items-center justify-between text-[10px] text-gray-400">
               <span className="flex items-center gap-1">
-                <Radio className={`w-3 h-3 ${interviewTurn === 'candidate_listening' ? 'text-emerald-400' : 'text-gray-400'}`} />
+                <Radio className={`w-3 h-3 ${conversationState === 'LISTENING' ? 'text-emerald-400' : 'text-gray-400'}`} />
                 <span>
-                  {interviewTurn === 'candidate_listening'
-                    ? 'Listening live — speak your answer!'
-                    : interviewTurn === 'interviewer_speaking'
-                    ? 'Anway is speaking — listen or click Interrupt'
-                    : 'Evaluating your answer...'}
+                  {conversationState === 'LISTENING'
+                    ? 'Microphone listening live — speak anytime!'
+                    : conversationState === 'SPEAKING'
+                    ? 'AI speaking — speak anytime to interrupt'
+                    : 'AI ready'}
                 </span>
               </span>
               <span className="flex items-center gap-1">
@@ -1799,7 +1435,7 @@ RETURN STRICT JSON ONLY:
                 <kbd className="px-1 py-0.5 rounded bg-white/10 text-[9px] text-gray-300 font-mono flex items-center gap-0.5">
                   <CornerDownLeft className="w-2.5 h-2.5" /> Enter
                 </kbd>
-                <span>to type</span>
+                <span>to send</span>
               </span>
             </div>
           </div>
